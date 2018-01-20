@@ -18,9 +18,6 @@ class TreeNode(object):
         else:
             self.feature = "X[%s]" % tree.feature[node_id]
 
-        self.value = tree.value[node_id]
-        if tree.n_outputs == 1:
-            self.value = self.value[0,:]
 
         # handle old & new version of trees. In 0.13.1 and 0.19.1,
         # the implementation of tree has been changed.
@@ -38,6 +35,13 @@ class TreeNode(object):
         else:
             assert False, "what is your sklearn version? No n_samples nor n_node_samples"
 
+        # calculate n_samples of each category and percentage of each
+        # category
+        self.value = tree.value[node_id]
+        if tree.n_outputs == 1:
+            self.value = self.value[0,:]
+        self.percents = [round(v*1.0/self.n_samples, 4) for v in self.value]
+
         self.left = None
         self.right = None
 
@@ -46,7 +50,8 @@ class TreeNode(object):
         return "%s <= %.4f\n" % (self.feature, self.threshold) + \
                "gini = %.4f\n" % self.impurity + \
                "samples = %s\n" % self.n_samples + \
-               "value = %s" % self.value
+               "value = %s\n" % self.value + \
+               "percents = %s" % self.percents
 
 
 
