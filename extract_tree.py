@@ -48,6 +48,28 @@ class TreeNode(object):
 
         self.left = None
         self.right = None
+        self.left_node_id = "undefined"
+        self.right_node_id = "undefined"
+
+    def set_left(self, child):
+        assert self.left is None
+        assert self.left_node_id == "undefined"
+        if child is None:
+            self.left_node_id = "no_child"
+        else:
+            assert isinstance(child, TreeNode)
+            self.left_node_id = child.node_id
+        self.left = child
+
+    def set_right(self, child):
+        assert self.right is None
+        assert self.right_node_id == "undefined"
+        if child is None:
+            self.right_node_id = "no_child"
+        else:
+            assert isinstance(child, TreeNode)
+            self.right_node_id = child.node_id
+        self.right = child
 
     def __repr__(self):
 
@@ -56,7 +78,8 @@ class TreeNode(object):
                "gini = %.4f\n" % self.impurity + \
                "samples = %s\n" % self.n_samples + \
                "value = %s\n" % self.value + \
-               "percents = %s" % self.percents
+               "percents = %s\n" % self.percents + \
+               "left_node_id = %s, right_node_id = %s" % (self.left_node_id, self.right_node_id)
 
 
 class Connection(object):
@@ -72,11 +95,34 @@ class Connection(object):
                "prob increases as %s" % self.prob_increase
 
 
-def get_tree(tree_, feature_names=None):
+def get_all_tree_nodes(tree_, feature_names=None):
 
     tree = {}
     for node_id in range(len(tree_.value)):
         tree[node_id] = TreeNode(node_id, tree_, feature_names)
+    return tree
+
+
+def construct_tree(tree_, feature_names=None):
+
+    tree = get_all_tree_nodes(tree_, feature_names)
+    for parent_node_id, child_node_id in enumerate(tree_.children_left):
+        parent = tree[parent_node_id]
+        if child_node_id == -1:  # leaf defined in sklearn. Hopefully they won't change it.
+            child = None
+        else:
+            child = tree[child_node_id]
+        parent.set_left(child)
+        print parent_node_id, child_node_id, parent.left_node_id
+
+    for parent_node_id, child_node_id in enumerate(tree_.children_right):
+        parent = tree[parent_node_id]
+        if child_node_id == -1:  # leaf defined in sklearn. Hopefully they won't change it.
+            child = None
+        else:
+            child = tree[child_node_id]
+        parent.set_right(child)
+
     return tree
 
 
@@ -88,7 +134,14 @@ if __name__ == "__main__":
     clf.fit(iris.data, iris.target)
 
     tree_ = clf.tree_
-    tree = get_tree(tree_)
+    tree = get_all_tree_nodes(tree_)
+    for node in tree.values():
+        print node
+        print
 
     connection = Connection(tree[0], tree[1])
-    print connection
+
+    tree = construct_tree(tree_)
+    for node in tree.values():
+        print node
+        print
