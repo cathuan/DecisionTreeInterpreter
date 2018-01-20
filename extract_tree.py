@@ -76,7 +76,7 @@ class Tree(object):
             self.tree_nodes[node_id] = TreeNode(node_id, tree_, feature_names)
 
         graph = TreeGraph(tree_)
-        self.contributions = Contributions(tree_, self.tree_nodes, graph)
+        self.contributions = Contributions(tree_, self.tree_nodes, graph, self.feature_names)
         self.predictor = Predictor(self.tree_nodes, graph)
 
         # sanity check
@@ -150,12 +150,14 @@ class TreeGraph(object):
         assert current_node_id == TreeGraph.ROOT
         return path
 
+
 class Contributions(object):
 
     Contribution = namedtuple("Contribution", ["feature", "condition", "impurity_contribution", "prob_contribution"])
 
-    def __init__(self, tree_, tree_nodes, graph):
+    def __init__(self, tree_, tree_nodes, graph, feature_names):
 
+        self.feature_names = feature_names
         self.n_classes = tree_.n_classes
         if tree_.n_outputs == 1:
             self.n_classes = self.n_classes[0]
@@ -205,36 +207,39 @@ class Contributions(object):
         contributions.append(bias_contribution)
         return contributions
 
-    # TODO: following 4 functions are almost duplicated. Need to fix. Also they can be hiden.
-    def _get_feature_probs_contribution(self, node_id):
+    def _record_feature_contributions(self, feature_contris, node_id, contribution_name):
         contributions = self.contributions[node_id]
-        feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
         for contribution in contributions:
-            feature_contris[contribution.feature] += contribution.prob_contribution
+            feature_contris[contribution.feature] += getattr(contribution, contribution_name)
+        return feature_contris
+
+    def _get_feature_probs_contribution(self, node_id):
+        feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
+        feature_contris = self._record_feature_contributions(feature_contris, node_id,
+                                                             "prob_contribution")
         return feature_contris
 
     def _get_feature_impurity_contribution(self, node_id):
-        contributions = self.contributions[node_id]
         feature_contris = defaultdict(lambda : 0)
-        for contribution in contributions:
-            feature_contris[contribution.feature] += contribution.impurity_contribution
+        feature_contris = self._record_feature_contributions(feature_contris, node_id,
+                                                             "impurity_contribution")
         return feature_contris
 
-    def output_feature_probs_contributions(self, node_id, feature_names):
-        feature_contris = self._get_feature_probs_contribution(node_id)
+    def _construct_contribution_output(self, feature_contris):
         output = ""
-        for feature in feature_names:
+        for feature in self.feature_names:
             output += "%s: %s, " % (feature, feature_contris[feature])
         output += "%s: %s" % ("bias", feature_contris["bias"])
         return output
 
-    def output_feature_impurity_contributions(self, node_id, feature_names):
+    def output_feature_probs_contributions(self, node_id):
+        feature_contris = self._get_feature_probs_contribution(node_id)
+        return self._construct_contribution_output(feature_contris)
+
+    def output_feature_impurity_contributions(self, node_id):
         feature_contris = self._get_feature_impurity_contribution(node_id)
-        output = ""
-        for feature in feature_names:
-            output += "%s: %s, " % (feature, feature_contris[feature])
-        output += "%s: %s" % ("bias", feature_contris["bias"])
-        return output
+        return self._construct_contribution_output(feature_contris)
+
 
 class Predictor(object):
 
