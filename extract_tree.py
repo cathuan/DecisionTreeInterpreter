@@ -3,6 +3,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn import tree
 import pandas as pd
 import numpy as np
+from collections import namedtuple
 
 """
 tree_ is object in sklearn.tree.tree_.Tree
@@ -105,54 +106,63 @@ class Connection(object):
                "prob increases as %s" % self.prob_increase
 
 
-def get_all_tree_nodes(tree_, feature_names=None):
+class Tree(object):
 
-    tree = {}
-    for node_id in range(len(tree_.value)):
-        tree[node_id] = TreeNode(node_id, tree_, feature_names)
-    return tree
+    Children = namedtuple("Children", ["left", "right"])
 
+    def __init__(self, tree_, feature_names=None):
 
-def construct_tree(tree_, feature_names=None):
+        self.all_nodes = {}
+        self.children = {}
+        self.leaves = {}
 
-    tree = get_all_tree_nodes(tree_, feature_names)
-    for parent_node_id, child_node_id in enumerate(tree_.children_left):
-        parent = tree[parent_node_id]
-        if child_node_id == -1:  # leaf defined in sklearn. Hopefully they won't change it.
-            child = None
-        else:
-            child = tree[child_node_id]
-        parent.set_left(child)
+        # construct and record all TreeNodes in a dict.
+        for node_id in range(len(tree_.value)):
+            self.all_nodes[node_id] = TreeNode(node_id, tree_, feature_names)
 
-    for parent_node_id, child_node_id in enumerate(tree_.children_right):
-        parent = tree[parent_node_id]
-        if child_node_id == -1:  # leaf defined in sklearn. Hopefully they won't change it.
-            child = None
-        else:
-            child = tree[child_node_id]
-        parent.set_right(child)
+        # create nodes parent-children relationship and record in self.children
+        # for those without children (aka leaves), stored in self.leaves
+        for parent_id, children_ids in enumerate(zip(tree_.children_left, tree_.children_right)):
+            left_children_id, right_children_id = children_ids
 
-    return tree
+            # sanity check. A node either has both children or no children
+            assert (left_children_id == -1 and right_children_id == -1) or \
+                    (left_children_id != -1 and right_children_id != -1)
 
+            if left_children_id == -1 and right_children_id == -1:
+                self.leaves[parent_id] = self.all_nodes[parent_id]
+            else:
+                self.children[parent_id] = Tree.Children(left_children_id, right_children_id)
 
-# FIXME: can't be worse...
-def split_data_at_node(data, node, tree):
+    def predict(self, data):
+        df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
+        df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
+        predicted_leaves = df_with_allocated_leaf["end_node"].values
+        return np.array([np.array(self.leaves[node_id].percents) for node_id in predicted_leaves])
 
-    if node.left is None:
-        data["end_node"] = node.node_id
-        return data
-    data_left = data[data[node.feature] <= node.threshold]
-    data_left_predicted = split_data_at_node(data_left, node.left, tree)
+    def _get_left_child(self, node_id):
+        assert node_id in self.children
+        return self.children[node_id].left
 
-    data_right = data[data[node.feature] > node.threshold]
-    data_right_predicted = split_data_at_node(data_right, node.right, tree)
+    def _get_right_child(self, node_id):
+        assert node_id in self.children
+        return self.children[node_id].right
 
-    data_predicted = pd.concat([data_left_predicted, data_right_predicted], axis=0).sort_index()
-    if node.node_id == 0:
-        predicted_leaves = data_predicted["end_node"].values
-        return np.array([np.array(tree[node_id].percents) for node_id in predicted_leaves])
-    else:
-        return data_predicted
+    # TODO: for a super deep tree, will the recursion over the limit?
+    def _split_at_node(self, data, node_id):
+        if node_id in self.leaves:
+            data["end_node"] = node_id
+            return data
+
+        assert node_id in self.children
+        node = self.all_nodes[node_id]
+        data_left = data[data[node.feature] <= node.threshold]
+        data_left_predicted = self._split_at_node(data_left, self._get_left_child(node_id))
+
+        data_right = data[data[node.feature] > node.threshold]
+        data_right_predicted = self._split_at_node(data_right, self._get_right_child(node_id))
+
+        return pd.concat([data_left_predicted, data_right_predicted], axis=0)
 
 
 if __name__ == "__main__":
@@ -162,18 +172,12 @@ if __name__ == "__main__":
     clf = DecisionTreeClassifier(max_depth=2)
     clf.fit(iris.data, iris.target)
 
+
     tree_ = clf.tree_
-    tree = get_all_tree_nodes(tree_)
-    connection = Connection(tree[0], tree[1])
-
-    tree = construct_tree(tree_, iris.feature_names)
-    root =tree[0]
-
+    tree = Tree(tree_, iris.feature_names)
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    ps = split_data_at_node(df, root, tree)
+    ps = tree.predict(df)
 
     ps_ = clf.predict_proba(iris.data)
-    for p, p_ in zip(ps, ps_):
-        print p
-        print p_
-        print
+    for a in zip(ps, ps_):
+        print a
