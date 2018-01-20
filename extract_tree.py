@@ -59,6 +59,19 @@ class TreeNode(object):
                "percents = %s" % self.percents
 
 
+class Connection(object):
+
+    def __init__(self, parent, child):
+        self.impurity_drop = parent.impurity - child.impurity
+        self.prob_increase = [round(child_p - parent_p, 6) for (child_p, parent_p)
+                              in zip(child.percents, parent.percents)]
+
+    def __repr__(self):
+
+        return "impurity drops %.4f\n" % self.impurity_drop + \
+               "prob increases as %s" % self.prob_increase
+
+
 def get_tree(tree_, feature_names=None):
 
     tree = {}
@@ -76,5 +89,6 @@ if __name__ == "__main__":
 
     tree_ = clf.tree_
     tree = get_tree(tree_)
-    for node in tree.values():
-        print node
+
+    connection = Connection(tree[0], tree[1])
+    print connection
