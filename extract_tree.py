@@ -2,6 +2,7 @@ from sklearn.datasets import load_iris
 from sklearn.tree import DecisionTreeClassifier
 from sklearn import tree
 import pandas as pd
+import numpy as np
 
 """
 tree_ is object in sklearn.tree.tree_.Tree
@@ -134,19 +135,24 @@ def construct_tree(tree_, feature_names=None):
     return tree
 
 
-def split_data_at_node(data, node):
+# FIXME: can't be worse...
+def split_data_at_node(data, node, tree):
 
     if node.left is None:
         data["end_node"] = node.node_id
         return data
     data_left = data[data[node.feature] <= node.threshold]
-    data_left_predicted = split_data_at_node(data_left, node.left)
+    data_left_predicted = split_data_at_node(data_left, node.left, tree)
 
     data_right = data[data[node.feature] > node.threshold]
-    data_right_predicted = split_data_at_node(data_right, node.right)
+    data_right_predicted = split_data_at_node(data_right, node.right, tree)
 
     data_predicted = pd.concat([data_left_predicted, data_right_predicted], axis=0).sort_index()
-    return data_predicted
+    if node.node_id == 0:
+        predicted_leaves = data_predicted["end_node"].values
+        return np.array([np.array(tree[node_id].percents) for node_id in predicted_leaves])
+    else:
+        return data_predicted
 
 
 if __name__ == "__main__":
@@ -164,5 +170,10 @@ if __name__ == "__main__":
     root =tree[0]
 
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    df = split_data_at_node(df, root)
-    print df
+    ps = split_data_at_node(df, root, tree)
+
+    ps_ = clf.predict_proba(iris.data)
+    for p, p_ in zip(ps, ps_):
+        print p
+        print p_
+        print
