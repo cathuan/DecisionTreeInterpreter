@@ -73,39 +73,22 @@ class Tree(object):
     def __init__(self, tree_, feature_names=None):
 
         self.all_nodes = {}
-        self.children = {}
-        self.parent = {}
-        self.leaves = {}
         self.contributions = {}
         self.n_classes = tree_.n_classes
         if tree_.n_outputs == 1:
             self.n_classes = self.n_classes[0]
 
+        self.graph = TreeGraph(tree_)
+
         # construct and record all TreeNodes in a dict.
         for node_id in range(len(tree_.value)):
             self.all_nodes[node_id] = TreeNode(node_id, tree_, feature_names)
 
-        # create nodes parent-children relationship and record in self.children
-        # for those without children (aka leaves), stored in self.leaves
-        for parent_id, children_ids in enumerate(zip(tree_.children_left, tree_.children_right)):
-            left_children_id, right_children_id = children_ids
-
-            # sanity check. A node either has both children or no children
-            assert (left_children_id == -1 and right_children_id == -1) or \
-                    (left_children_id != -1 and right_children_id != -1)
-
-            self.parent[left_children_id] = (parent_id, "<=")
-            self.parent[right_children_id] = (parent_id, ">")
-            if left_children_id == -1 and right_children_id == -1:
-                self.leaves[parent_id] = self.all_nodes[parent_id]
-            else:
-                self.children[parent_id] = Tree.Children(left_children_id, right_children_id)
-
-        for node_id in self.leaves:
+        for node_id in self.graph.get_leaf_ids():
             contributions = []
             current_node_id = node_id
-            while current_node_id in self.parent:
-                parent_id, cp = self.parent[current_node_id]
+            while self.graph.has_parent(current_node_id):
+                parent_id, cp = self.graph.get_parent(current_node_id)
                 parent_node = self.all_nodes[parent_id]
                 child_node = self.all_nodes[current_node_id]
                 feature = parent_node.feature
@@ -128,7 +111,7 @@ class Tree(object):
 
     # TODO: following 4 functions are almost duplicated. Need to fix. Also they can be hiden.
     def get_feature_probs_contribution(self, node_id):
-        assert node_id in self.leaves
+        assert self.graph.is_leaf(node_id)
         contributions = self.contributions[node_id]
         feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
         for contribution in contributions:
@@ -144,7 +127,7 @@ class Tree(object):
         return output
 
     def get_feature_impurity_contribution(self, node_id):
-        assert node_id in self.leaves
+        assert self.graph.is_leaf(node_id)
         contributions = self.contributions[node_id]
         feature_contris = defaultdict(lambda : 0)
         for contribution in contributions:
@@ -163,7 +146,7 @@ class Tree(object):
         df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
         df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
         predicted_leaves = df_with_allocated_leaf["end_node"].values
-        return np.array([np.array(self.leaves[node_id].percents) for node_id in predicted_leaves])
+        return np.array([np.array(self.all_nodes[node_id].percents) for node_id in predicted_leaves])
 
     def predict_probs_contribution(self, data):
         df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
@@ -179,29 +162,68 @@ class Tree(object):
         feature_names = data.columns
         return np.array([self.output_feature_impurity_contributions(node_id, feature_names) for node_id in predicted_leaves])
 
-    def _get_left_child(self, node_id):
-        assert node_id in self.children
-        return self.children[node_id].left
-
-    def _get_right_child(self, node_id):
-        assert node_id in self.children
-        return self.children[node_id].right
-
     # TODO: for a super deep tree, will the recursion over the limit?
     def _split_at_node(self, data, node_id):
-        if node_id in self.leaves:
+        if self.graph.is_leaf(node_id):
             data["end_node"] = node_id
             return data
 
-        assert node_id in self.children
         node = self.all_nodes[node_id]
         data_left = data[data[node.feature] <= node.threshold]
-        data_left_predicted = self._split_at_node(data_left, self._get_left_child(node_id))
+        data_left_predicted = self._split_at_node(data_left, self.graph.get_left_child(node_id))
 
         data_right = data[data[node.feature] > node.threshold]
-        data_right_predicted = self._split_at_node(data_right, self._get_right_child(node_id))
+        data_right_predicted = self._split_at_node(data_right, self.graph.get_right_child(node_id))
 
         return pd.concat([data_left_predicted, data_right_predicted], axis=0)
+
+
+class TreeGraph(object):
+
+    Children = namedtuple("Children", ["left", "right"])
+    LEAF = -1  # in sklearn, the node id of a leaf is -1. Hopefully they won't change this..
+
+    def __init__(self, tree_):
+
+        self.leaves = []
+        self.children = {}
+        self.parent = {}
+
+        # create nodes parent-children relationship
+        for parent_id, children_ids in enumerate(zip(tree_.children_left, tree_.children_right)):
+            left_children_id, right_children_id = children_ids
+
+            # sanity check. A node either has both children or no children
+            assert (left_children_id == TreeGraph.LEAF and right_children_id == TreeGraph.LEAF) or \
+                    (left_children_id != TreeGraph.LEAF and right_children_id != TreeGraph.LEAF)
+
+            # record the child is the left child of the parent or the right child
+            self.parent[left_children_id] = (parent_id, "<=")
+            self.parent[right_children_id] = (parent_id, ">")
+            if left_children_id == TreeGraph.LEAF and right_children_id == TreeGraph.LEAF:
+                self.leaves.append(parent_id)
+            else:
+                self.children[parent_id] = TreeGraph.Children(left_children_id, right_children_id)
+
+    def get_left_child(self, node_id):
+        assert node_id in self.children
+        return self.children[node_id].left
+
+    def get_right_child(self, node_id):
+        assert node_id in self.children
+        return self.children[node_id].right
+
+    def is_leaf(self, node_id):
+        return node_id in self.leaves
+
+    def get_leaf_ids(self):
+        return self.leaves
+
+    def has_parent(self, node_id):
+        return node_id in self.parent
+
+    def get_parent(self, node_id):
+        return self.parent[node_id]
 
 
 if __name__ == "__main__":
