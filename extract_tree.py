@@ -22,7 +22,6 @@ class TreeNode(object):
         else:
             self.feature = "X[%s]" % tree_.feature[node_id]
 
-
         # handle old & new version of trees. In 0.13.1 and 0.19.1,
         # the implementation of tree_ has been changed.
         if hasattr(tree_, "init_error"):
@@ -51,24 +50,31 @@ class TreeNode(object):
         self.left_node_id = "undefined"
         self.right_node_id = "undefined"
 
+        self.left_connection = None
+        self.right_connection = None
+
     def set_left(self, child):
         assert self.left is None
         assert self.left_node_id == "undefined"
+        assert self.left_connection is None
         if child is None:
             self.left_node_id = "no_child"
         else:
             assert isinstance(child, TreeNode)
             self.left_node_id = child.node_id
+            self.left_connection = Connection(self, child)
         self.left = child
 
     def set_right(self, child):
         assert self.right is None
         assert self.right_node_id == "undefined"
+        assert self.right_connection is None
         if child is None:
             self.right_node_id = "no_child"
         else:
             assert isinstance(child, TreeNode)
             self.right_node_id = child.node_id
+            self.right_connection = Connection(self, child)
         self.right = child
 
     def __repr__(self):
@@ -79,7 +85,9 @@ class TreeNode(object):
                "samples = %s\n" % self.n_samples + \
                "value = %s\n" % self.value + \
                "percents = %s\n" % self.percents + \
-               "left_node_id = %s, right_node_id = %s" % (self.left_node_id, self.right_node_id)
+               "left_node_id = %s, right_node_id = %s\n" % (self.left_node_id, self.right_node_id) + \
+               "left connection: %s\n" % self.left_connection + \
+               "right conncection: %s" % self.right_connection
 
 
 class Connection(object):
@@ -91,7 +99,7 @@ class Connection(object):
 
     def __repr__(self):
 
-        return "impurity drops %.4f\n" % self.impurity_drop + \
+        return "impurity drops %.4f, " % self.impurity_drop + \
                "prob increases as %s" % self.prob_increase
 
 
@@ -135,10 +143,6 @@ if __name__ == "__main__":
 
     tree_ = clf.tree_
     tree = get_all_tree_nodes(tree_)
-    for node in tree.values():
-        print node
-        print
-
     connection = Connection(tree[0], tree[1])
 
     tree = construct_tree(tree_)
