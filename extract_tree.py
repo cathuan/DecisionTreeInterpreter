@@ -85,16 +85,19 @@ class Tree(object):
                 assert graph.is_leaf(node.node_id)
 
     def predict_probs(self, data):
-        predicted_leaves_id = self.predictor.predict_leaf_ids(data)
-        return np.array([np.array(self.tree_nodes[node_id].percents) for node_id in predicted_leaves_id])
+        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
+        return np.array([np.array(self.tree_nodes[node_id].percents)
+                         for node_id in predicted_leaves_ids])
 
     def predict_probs_contribution(self, data):
-        predicted_leaves_id = self.predictor.predict_leaf_ids(data)
-        return np.array([self.contributions.output_feature_probs_contributions(node_id, self.feature_names) for node_id in predicted_leaves_id])
+        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
+        return np.array([self.contributions.output_feature_probs_contributions(node_id)
+                         for node_id in predicted_leaves_ids])
 
     def predict_impurity_contribution(self, data):
-        predicted_leaves_id = self.predictor.predict_leaf_ids(data)
-        return np.array([self.contributions.output_feature_impurity_contributions(node_id, self.feature_names) for node_id in predicted_leaves_id])
+        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
+        return np.array([self.contributions.output_feature_impurity_contributions(node_id)
+                         for node_id in predicted_leaves_ids])
 
 
 class TreeGraph(object):
