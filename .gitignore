@@ -3,3 +3,4 @@
 *.png
 *.ref.py
 *.tags*
+*.pyc

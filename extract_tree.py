@@ -48,7 +48,7 @@ class TreeNode(object):
         self.value = tree_.value[node_id]
         if tree_.n_outputs == 1:
             self.value = self.value[0,:]
-        self.percents = np.array([round(v*1.0/self.n_samples, 4) for v in self.value])
+        self.percents = np.array([round(v*1.0/self.value.sum(), 4) for v in self.value])
 
     # debug
     def __repr__(self):
@@ -63,7 +63,9 @@ class TreeNode(object):
 
 class Tree(object):
 
-    def __init__(self, tree_, feature_names=None):
+    def __init__(self, clf, feature_names=None):
+
+        tree_ = clf.tree_
 
         if feature_names is not None:
             self.feature_names = feature_names
@@ -258,6 +260,7 @@ class Predictor(object):
     def predict_leaf_ids(self, data):
         predicted_leaves_id = self._split_at_node(data, 0)  # 0 is the node id for root
         predicted_leaves_id = sorted(predicted_leaves_id)
+        assert len(predicted_leaves_id) == len(data)
         return [node_id for index, node_id in predicted_leaves_id]
 
     # TODO: for a super deep tree, will the recursion over the limit?
@@ -284,9 +287,9 @@ if __name__ == "__main__":
 
 
     tree_ = clf.tree_
-    tree = Tree(tree_, iris.feature_names)
+    tree = Tree(clf, iris.feature_names)
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    ps = tree.output_impurity_contributions(df)
+    ps = tree.output_probs_contributions(df)
     print ps
 
     #ps_ = clf.predict_proba(iris.data)
