@@ -1,6 +1,7 @@
 from sklearn.datasets import load_iris
 from sklearn.tree import DecisionTreeClassifier
 from sklearn import tree
+import pandas as pd
 
 """
 tree_ is object in sklearn.tree.tree_.Tree
@@ -121,7 +122,6 @@ def construct_tree(tree_, feature_names=None):
         else:
             child = tree[child_node_id]
         parent.set_left(child)
-        print parent_node_id, child_node_id, parent.left_node_id
 
     for parent_node_id, child_node_id in enumerate(tree_.children_right):
         parent = tree[parent_node_id]
@@ -132,6 +132,21 @@ def construct_tree(tree_, feature_names=None):
         parent.set_right(child)
 
     return tree
+
+
+def split_data_at_node(data, node):
+
+    if node.left is None:
+        data["end_node"] = node.node_id
+        return data
+    data_left = data[data[node.feature] <= node.threshold]
+    data_left_predicted = split_data_at_node(data_left, node.left)
+
+    data_right = data[data[node.feature] > node.threshold]
+    data_right_predicted = split_data_at_node(data_right, node.right)
+
+    data_predicted = pd.concat([data_left_predicted, data_right_predicted], axis=0).sort_index()
+    return data_predicted
 
 
 if __name__ == "__main__":
@@ -145,7 +160,9 @@ if __name__ == "__main__":
     tree = get_all_tree_nodes(tree_)
     connection = Connection(tree[0], tree[1])
 
-    tree = construct_tree(tree_)
-    for node in tree.values():
-        print node
-        print
+    tree = construct_tree(tree_, iris.feature_names)
+    root =tree[0]
+
+    df = pd.DataFrame(iris.data, columns=iris.feature_names)
+    df = split_data_at_node(df, root)
+    print df
