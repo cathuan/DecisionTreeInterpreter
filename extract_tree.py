@@ -20,7 +20,9 @@ class TreeNode(object):
         assert node_id >= 0
         self.node_id = node_id
         self.threshold = tree_.threshold[node_id]
-        if feature_names is not None:
+        if tree_.feature[node_id] == -2:  # it means this node is a leaf
+            self.feature = None
+        elif feature_names is not None:
             self.feature = feature_names[tree_.feature[node_id]]
         else:
             self.feature = "X[%s]" % tree_.feature[node_id]
@@ -58,130 +60,48 @@ class TreeNode(object):
                "value = %s\n" % self.value + \
                "percents = %s" % self.percents
 
-def calculate_contribution(parent, child):
-    impurity_drop = parent.impurity - child.impurity
-    prob_increase = np.array([child_p - parent_p for (child_p, parent_p)
-                              in zip(child.percents, parent.percents)])
-    return impurity_drop, prob_increase
-
 
 class Tree(object):
 
-    Children = namedtuple("Children", ["left", "right"])
-    Contribution = namedtuple("Contribution", ["feature", "condition", "impurity_contribution", "prob_contribution"])
-
     def __init__(self, tree_, feature_names=None):
 
-        self.all_nodes = {}
-        self.contributions = {}
-        self.n_classes = tree_.n_classes
-        if tree_.n_outputs == 1:
-            self.n_classes = self.n_classes[0]
+        if feature_names is not None:
+            self.feature_names = feature_names
+        else:
+            self.feature_names = ["X[%s]" % feature for feature in range(tree_.n_features)]
 
-        self.graph = TreeGraph(tree_)
-
+        self.tree_nodes = {}
         # construct and record all TreeNodes in a dict.
         for node_id in range(len(tree_.value)):
-            self.all_nodes[node_id] = TreeNode(node_id, tree_, feature_names)
+            self.tree_nodes[node_id] = TreeNode(node_id, tree_, feature_names)
 
-        for node_id in self.graph.get_leaf_ids():
-            contributions = []
-            current_node_id = node_id
-            while self.graph.has_parent(current_node_id):
-                parent_id, cp = self.graph.get_parent(current_node_id)
-                parent_node = self.all_nodes[parent_id]
-                child_node = self.all_nodes[current_node_id]
-                feature = parent_node.feature
-                threshold = parent_node.threshold
-                impurity_drop, prob_increase = calculate_contribution(parent_node, child_node)
-                contribution = Tree.Contribution(feature=feature,
-                                                 condition="%s%s%s" % (feature, cp, threshold),
-                                                 impurity_contribution=impurity_drop,
-                                                 prob_contribution=prob_increase)
-                contributions.append(contribution)
-                current_node_id = parent_id
-            assert current_node_id == 0  # root id
-            root = self.all_nodes[current_node_id]
-            bias_contribution = Tree.Contribution(feature="bias",
-                                                  condition=None,
-                                                  impurity_contribution=root.impurity,
-                                                  prob_contribution=root.percents)
-            contributions.append(bias_contribution)
-            self.contributions[node_id] = contributions
+        graph = TreeGraph(tree_)
+        self.contributions = Contributions(tree_, self.tree_nodes, graph)
+        self.predictor = Predictor(self.tree_nodes, graph)
 
-    # TODO: following 4 functions are almost duplicated. Need to fix. Also they can be hiden.
-    def get_feature_probs_contribution(self, node_id):
-        assert self.graph.is_leaf(node_id)
-        contributions = self.contributions[node_id]
-        feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
-        for contribution in contributions:
-            feature_contris[contribution.feature] += contribution.prob_contribution
-        return feature_contris
-
-    def output_feature_probs_contributions(self, node_id, feature_names):
-        feature_contris = self.get_feature_probs_contribution(node_id)
-        output = ""
-        for feature in feature_names:
-            output += "%s: %s, " % (feature, feature_contris[feature])
-        output += "%s: %s" % ("bias", feature_contris["bias"])
-        return output
-
-    def get_feature_impurity_contribution(self, node_id):
-        assert self.graph.is_leaf(node_id)
-        contributions = self.contributions[node_id]
-        feature_contris = defaultdict(lambda : 0)
-        for contribution in contributions:
-            feature_contris[contribution.feature] += contribution.impurity_contribution
-        return feature_contris
-
-    def output_feature_impurity_contributions(self, node_id, feature_names):
-        feature_contris = self.get_feature_impurity_contribution(node_id)
-        output = ""
-        for feature in feature_names:
-            output += "%s: %s, " % (feature, feature_contris[feature])
-        output += "%s: %s" % ("bias", feature_contris["bias"])
-        return output
+        # sanity check
+        for node in self.tree_nodes.values():
+            if node.feature == -2:
+                assert graph.is_leaf(node.node_id)
 
     def predict_probs(self, data):
-        df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
-        df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
-        predicted_leaves = df_with_allocated_leaf["end_node"].values
-        return np.array([np.array(self.all_nodes[node_id].percents) for node_id in predicted_leaves])
+        predicted_leaves_id = self.predictor.predict_leaf_ids(data)
+        return np.array([np.array(self.tree_nodes[node_id].percents) for node_id in predicted_leaves_id])
 
     def predict_probs_contribution(self, data):
-        df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
-        df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
-        predicted_leaves = df_with_allocated_leaf["end_node"].values
-        feature_names = data.columns
-        return np.array([self.output_feature_probs_contributions(node_id, feature_names) for node_id in predicted_leaves])
+        predicted_leaves_id = self.predictor.predict_leaf_ids(data)
+        return np.array([self.contributions.output_feature_probs_contributions(node_id, self.feature_names) for node_id in predicted_leaves_id])
 
     def predict_impurity_contribution(self, data):
-        df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
-        df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
-        predicted_leaves = df_with_allocated_leaf["end_node"].values
-        feature_names = data.columns
-        return np.array([self.output_feature_impurity_contributions(node_id, feature_names) for node_id in predicted_leaves])
-
-    # TODO: for a super deep tree, will the recursion over the limit?
-    def _split_at_node(self, data, node_id):
-        if self.graph.is_leaf(node_id):
-            data["end_node"] = node_id
-            return data
-
-        node = self.all_nodes[node_id]
-        data_left = data[data[node.feature] <= node.threshold]
-        data_left_predicted = self._split_at_node(data_left, self.graph.get_left_child(node_id))
-
-        data_right = data[data[node.feature] > node.threshold]
-        data_right_predicted = self._split_at_node(data_right, self.graph.get_right_child(node_id))
-
-        return pd.concat([data_left_predicted, data_right_predicted], axis=0)
+        predicted_leaves_id = self.predictor.predict_leaf_ids(data)
+        return np.array([self.contributions.output_feature_impurity_contributions(node_id, self.feature_names) for node_id in predicted_leaves_id])
 
 
 class TreeGraph(object):
 
     Children = namedtuple("Children", ["left", "right"])
     LEAF = -1  # in sklearn, the node id of a leaf is -1. Hopefully they won't change this..
+    ROOT = 0  # in sklearn, the node if of the root is 0.
 
     def __init__(self, tree_):
 
@@ -219,11 +139,127 @@ class TreeGraph(object):
     def get_leaf_ids(self):
         return self.leaves
 
-    def has_parent(self, node_id):
-        return node_id in self.parent
+    def get_path_to_root(self, node_id):
+        assert node_id in self.leaves
+        path = []
+        current_node_id = node_id
+        while current_node_id in self.parent:
+            parent_id, cp = self.parent[current_node_id]
+            path.append((parent_id, cp))
+            current_node_id = parent_id
+        assert current_node_id == TreeGraph.ROOT
+        return path
 
-    def get_parent(self, node_id):
-        return self.parent[node_id]
+class Contributions(object):
+
+    Contribution = namedtuple("Contribution", ["feature", "condition", "impurity_contribution", "prob_contribution"])
+
+    def __init__(self, tree_, tree_nodes, graph):
+
+        self.n_classes = tree_.n_classes
+        if tree_.n_outputs == 1:
+            self.n_classes = self.n_classes[0]
+
+        self.contributions = {}
+        for node_id in graph.get_leaf_ids():
+            path = graph.get_path_to_root(node_id)
+            contributions = self._construct_contributions(node_id, path, tree_nodes)
+            self.contributions[node_id] = contributions
+
+    def _construct_single_contribution(self, parent_node, child_node, cp):
+        feature = parent_node.feature
+        threshold = parent_node.threshold
+        impurity_drop = parent_node.impurity - child_node.impurity
+        prob_increase = np.array([child_p - parent_p for (child_p, parent_p)
+                                  in zip(child_node.percents, parent_node.percents)])
+        contribution = Contributions.Contribution(feature=feature,
+                                                  condition="%s%s%s" % (feature, cp, threshold),
+                                                  impurity_contribution=impurity_drop,
+                                                  prob_contribution=prob_increase)
+        return contribution
+
+    def _construct_root_contribution(self, root):
+
+        bias_contribution = Contributions.Contribution(feature="bias",
+                                                       condition="bias",
+                                                       impurity_contribution=root.impurity,
+                                                       prob_contribution=root.percents)
+        return bias_contribution
+
+    def _construct_contributions(self, node_id, path, tree_nodes):
+
+        contributions = []
+        current_node_id = node_id
+
+        for parent_id, cp in path:
+            parent_node = tree_nodes[parent_id]
+            child_node = tree_nodes[current_node_id]
+
+            contribution = self._construct_single_contribution(parent_node, child_node, cp)
+            contributions.append(contribution)
+            current_node_id = parent_id
+
+        assert current_node_id == 0  # root id
+        root = tree_nodes[current_node_id]
+        bias_contribution = self._construct_root_contribution(root)
+        contributions.append(bias_contribution)
+        return contributions
+
+    # TODO: following 4 functions are almost duplicated. Need to fix. Also they can be hiden.
+    def _get_feature_probs_contribution(self, node_id):
+        contributions = self.contributions[node_id]
+        feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
+        for contribution in contributions:
+            feature_contris[contribution.feature] += contribution.prob_contribution
+        return feature_contris
+
+    def _get_feature_impurity_contribution(self, node_id):
+        contributions = self.contributions[node_id]
+        feature_contris = defaultdict(lambda : 0)
+        for contribution in contributions:
+            feature_contris[contribution.feature] += contribution.impurity_contribution
+        return feature_contris
+
+    def output_feature_probs_contributions(self, node_id, feature_names):
+        feature_contris = self._get_feature_probs_contribution(node_id)
+        output = ""
+        for feature in feature_names:
+            output += "%s: %s, " % (feature, feature_contris[feature])
+        output += "%s: %s" % ("bias", feature_contris["bias"])
+        return output
+
+    def output_feature_impurity_contributions(self, node_id, feature_names):
+        feature_contris = self._get_feature_impurity_contribution(node_id)
+        output = ""
+        for feature in feature_names:
+            output += "%s: %s, " % (feature, feature_contris[feature])
+        output += "%s: %s" % ("bias", feature_contris["bias"])
+        return output
+
+class Predictor(object):
+
+    def __init__(self, tree_nodes, graph):
+        self.graph = graph
+        self.tree_nodes = tree_nodes
+
+    def predict_leaf_ids(self, data):
+        predicted_leaves_id = self._split_at_node(data, 0)  # 0 is the node id for root
+        predicted_leaves_id = sorted(predicted_leaves_id)
+        return [node_id for index, node_id in predicted_leaves_id]
+
+    # TODO: for a super deep tree, will the recursion over the limit?
+    def _split_at_node(self, data, node_id):
+        if self.graph.is_leaf(node_id):
+            return zip(data.index, [node_id]*len(data.index))
+
+        node = self.tree_nodes[node_id]
+        data_left = data[data[node.feature] <= node.threshold]
+        predicted_leaves_left = self._split_at_node(data_left, self.graph.get_left_child(node_id))
+
+        data_right = data[data[node.feature] > node.threshold]
+        predicted_leaves_right = self._split_at_node(data_right, self.graph.get_right_child(node_id))
+
+        return predicted_leaves_left + predicted_leaves_right
 
 
 if __name__ == "__main__":
