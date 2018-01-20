@@ -86,18 +86,23 @@ class Tree(object):
 
     def predict_probs(self, data):
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return np.array([np.array(self.tree_nodes[node_id].percents)
-                         for node_id in predicted_leaves_ids])
+        return np.array([self.tree_nodes[node_id].percents for node_id in predicted_leaves_ids])
 
-    def predict_probs_contribution(self, data):
+    def output_probs_contributions(self, data):
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return np.array([self.contributions.output_feature_probs_contributions(node_id)
-                         for node_id in predicted_leaves_ids])
+        return [self.contributions.get_feature_probs_contribution(node_id) for node_id in predicted_leaves_ids]
 
-    def predict_impurity_contribution(self, data):
+    def output_impurity_contributions(self, data):
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return np.array([self.contributions.output_feature_impurity_contributions(node_id)
-                         for node_id in predicted_leaves_ids])
+        return [self.contributions.get_feature_impurity_contribution(node_id) for node_id in predicted_leaves_ids]
+
+    def print_probs_contributions(self, data):
+        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
+        return [self.contributions.output_feature_probs_contributions(node_id) for node_id in predicted_leaves_ids]
+
+    def print_impurity_contributions(self, data):
+        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
+        return [self.contributions.output_feature_impurity_contributions(node_id) for node_id in predicted_leaves_ids]
 
 
 class TreeGraph(object):
@@ -216,13 +221,13 @@ class Contributions(object):
             feature_contris[contribution.feature] += getattr(contribution, contribution_name)
         return feature_contris
 
-    def _get_feature_probs_contribution(self, node_id):
+    def get_feature_probs_contribution(self, node_id):
         feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
         feature_contris = self._record_feature_contributions(feature_contris, node_id,
                                                              "prob_contribution")
         return feature_contris
 
-    def _get_feature_impurity_contribution(self, node_id):
+    def get_feature_impurity_contribution(self, node_id):
         feature_contris = defaultdict(lambda : 0)
         feature_contris = self._record_feature_contributions(feature_contris, node_id,
                                                              "impurity_contribution")
@@ -236,11 +241,11 @@ class Contributions(object):
         return output
 
     def output_feature_probs_contributions(self, node_id):
-        feature_contris = self._get_feature_probs_contribution(node_id)
+        feature_contris = self.get_feature_probs_contribution(node_id)
         return self._construct_contribution_output(feature_contris)
 
     def output_feature_impurity_contributions(self, node_id):
-        feature_contris = self._get_feature_impurity_contribution(node_id)
+        feature_contris = self.get_feature_impurity_contribution(node_id)
         return self._construct_contribution_output(feature_contris)
 
 
@@ -281,7 +286,7 @@ if __name__ == "__main__":
     tree_ = clf.tree_
     tree = Tree(tree_, iris.feature_names)
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    ps = tree.predict_impurity_contribution(df)
+    ps = tree.output_impurity_contributions(df)
     print ps
 
     #ps_ = clf.predict_proba(iris.data)
