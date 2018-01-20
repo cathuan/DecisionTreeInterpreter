@@ -3,7 +3,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn import tree
 import pandas as pd
 import numpy as np
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 """
 tree_ is object in sklearn.tree.tree_.Tree
@@ -46,40 +46,9 @@ class TreeNode(object):
         self.value = tree_.value[node_id]
         if tree_.n_outputs == 1:
             self.value = self.value[0,:]
-        self.percents = [round(v*1.0/self.n_samples, 4) for v in self.value]
+        self.percents = np.array([round(v*1.0/self.n_samples, 4) for v in self.value])
 
-        self.left = None
-        self.right = None
-        self.left_node_id = "undefined"
-        self.right_node_id = "undefined"
-
-        self.left_connection = None
-        self.right_connection = None
-
-    def set_left(self, child):
-        assert self.left is None
-        assert self.left_node_id == "undefined"
-        assert self.left_connection is None
-        if child is None:
-            self.left_node_id = "no_child"
-        else:
-            assert isinstance(child, TreeNode)
-            self.left_node_id = child.node_id
-            self.left_connection = Connection(self, child)
-        self.left = child
-
-    def set_right(self, child):
-        assert self.right is None
-        assert self.right_node_id == "undefined"
-        assert self.right_connection is None
-        if child is None:
-            self.right_node_id = "no_child"
-        else:
-            assert isinstance(child, TreeNode)
-            self.right_node_id = child.node_id
-            self.right_connection = Connection(self, child)
-        self.right = child
-
+    # debug
     def __repr__(self):
 
         return "=== TreeNode %s ===\n" % self.node_id + \
@@ -87,34 +56,30 @@ class TreeNode(object):
                "gini = %.4f\n" % self.impurity + \
                "samples = %s\n" % self.n_samples + \
                "value = %s\n" % self.value + \
-               "percents = %s\n" % self.percents + \
-               "left_node_id = %s, right_node_id = %s\n" % (self.left_node_id, self.right_node_id) + \
-               "left connection: %s\n" % self.left_connection + \
-               "right conncection: %s" % self.right_connection
+               "percents = %s" % self.percents
 
-
-class Connection(object):
-
-    def __init__(self, parent, child):
-        self.impurity_drop = parent.impurity - child.impurity
-        self.prob_increase = [round(child_p - parent_p, 6) for (child_p, parent_p)
-                              in zip(child.percents, parent.percents)]
-
-    def __repr__(self):
-
-        return "impurity drops %.4f, " % self.impurity_drop + \
-               "prob increases as %s" % self.prob_increase
+def calculate_contribution(parent, child):
+    impurity_drop = parent.impurity - child.impurity
+    prob_increase = np.array([child_p - parent_p for (child_p, parent_p)
+                              in zip(child.percents, parent.percents)])
+    return impurity_drop, prob_increase
 
 
 class Tree(object):
 
     Children = namedtuple("Children", ["left", "right"])
+    Contribution = namedtuple("Contribution", ["feature", "condition", "impurity_contribution", "prob_contribution"])
 
     def __init__(self, tree_, feature_names=None):
 
         self.all_nodes = {}
         self.children = {}
+        self.parent = {}
         self.leaves = {}
+        self.contributions = {}
+        self.n_classes = tree_.n_classes
+        if tree_.n_outputs == 1:
+            self.n_classes = self.n_classes[0]
 
         # construct and record all TreeNodes in a dict.
         for node_id in range(len(tree_.value)):
@@ -129,16 +94,90 @@ class Tree(object):
             assert (left_children_id == -1 and right_children_id == -1) or \
                     (left_children_id != -1 and right_children_id != -1)
 
+            self.parent[left_children_id] = (parent_id, "<=")
+            self.parent[right_children_id] = (parent_id, ">")
             if left_children_id == -1 and right_children_id == -1:
                 self.leaves[parent_id] = self.all_nodes[parent_id]
             else:
                 self.children[parent_id] = Tree.Children(left_children_id, right_children_id)
 
-    def predict(self, data):
+        for node_id in self.leaves:
+            contributions = []
+            current_node_id = node_id
+            while current_node_id in self.parent:
+                parent_id, cp = self.parent[current_node_id]
+                parent_node = self.all_nodes[parent_id]
+                child_node = self.all_nodes[current_node_id]
+                feature = parent_node.feature
+                threshold = parent_node.threshold
+                impurity_drop, prob_increase = calculate_contribution(parent_node, child_node)
+                contribution = Tree.Contribution(feature=feature,
+                                                 condition="%s%s%s" % (feature, cp, threshold),
+                                                 impurity_contribution=impurity_drop,
+                                                 prob_contribution=prob_increase)
+                contributions.append(contribution)
+                current_node_id = parent_id
+            assert current_node_id == 0  # root id
+            root = self.all_nodes[current_node_id]
+            bias_contribution = Tree.Contribution(feature="bias",
+                                                  condition=None,
+                                                  impurity_contribution=root.impurity,
+                                                  prob_contribution=root.percents)
+            contributions.append(bias_contribution)
+            self.contributions[node_id] = contributions
+
+    # TODO: following 4 functions are almost duplicated. Need to fix. Also they can be hiden.
+    def get_feature_probs_contribution(self, node_id):
+        assert node_id in self.leaves
+        contributions = self.contributions[node_id]
+        feature_contris = defaultdict(lambda : np.array([0.0]*self.n_classes))
+        for contribution in contributions:
+            feature_contris[contribution.feature] += contribution.prob_contribution
+        return feature_contris
+
+    def output_feature_probs_contributions(self, node_id, feature_names):
+        feature_contris = self.get_feature_probs_contribution(node_id)
+        output = ""
+        for feature in feature_names:
+            output += "%s: %s, " % (feature, feature_contris[feature])
+        output += "%s: %s" % ("bias", feature_contris["bias"])
+        return output
+
+    def get_feature_impurity_contribution(self, node_id):
+        assert node_id in self.leaves
+        contributions = self.contributions[node_id]
+        feature_contris = defaultdict(lambda : 0)
+        for contribution in contributions:
+            feature_contris[contribution.feature] += contribution.impurity_contribution
+        return feature_contris
+
+    def output_feature_impurity_contributions(self, node_id, feature_names):
+        feature_contris = self.get_feature_impurity_contribution(node_id)
+        output = ""
+        for feature in feature_names:
+            output += "%s: %s, " % (feature, feature_contris[feature])
+        output += "%s: %s" % ("bias", feature_contris["bias"])
+        return output
+
+    def predict_probs(self, data):
         df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
         df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
         predicted_leaves = df_with_allocated_leaf["end_node"].values
         return np.array([np.array(self.leaves[node_id].percents) for node_id in predicted_leaves])
+
+    def predict_probs_contribution(self, data):
+        df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
+        df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
+        predicted_leaves = df_with_allocated_leaf["end_node"].values
+        feature_names = data.columns
+        return np.array([self.output_feature_probs_contributions(node_id, feature_names) for node_id in predicted_leaves])
+
+    def predict_impurity_contribution(self, data):
+        df_with_allocated_leaf = self._split_at_node(data, 0)  # 0 is the node id for root
+        df_with_allocated_leaf = df_with_allocated_leaf.sort_index()
+        predicted_leaves = df_with_allocated_leaf["end_node"].values
+        feature_names = data.columns
+        return np.array([self.output_feature_impurity_contributions(node_id, feature_names) for node_id in predicted_leaves])
 
     def _get_left_child(self, node_id):
         assert node_id in self.children
@@ -169,15 +208,16 @@ if __name__ == "__main__":
 
     # train the DecisionTree model
     iris = load_iris()
-    clf = DecisionTreeClassifier(max_depth=2)
+    clf = DecisionTreeClassifier()
     clf.fit(iris.data, iris.target)
 
 
     tree_ = clf.tree_
     tree = Tree(tree_, iris.feature_names)
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    ps = tree.predict(df)
+    ps = tree.predict_impurity_contribution(df)
+    print ps
 
-    ps_ = clf.predict_proba(iris.data)
-    for a in zip(ps, ps_):
-        print a
+    #ps_ = clf.predict_proba(iris.data)
+    #for a in zip(ps, ps_):
+    #    print a
