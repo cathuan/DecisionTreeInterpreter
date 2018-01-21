@@ -94,8 +94,8 @@ class Tree(object):
             if node.feature == -2:
                 assert graph.is_leaf(node.node_id)
 
-    #@profile
     # output shape: n_data * n_classes * (n_features+1)
+    @profile
     def output_probs_contributions(self, data):
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
         contributions = []

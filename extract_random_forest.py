@@ -20,24 +20,46 @@ class Forest(object):
             self.trees.append(Tree(estimator, feature_names))
 
     # output shape: n_data * n_classes * (n_features + 1)
-    # FIXME: memory and speed issue here
     def output_probs_contributions(self, data):
 
-        # n_data -> n_trees * n_classes * (n_features+1)
-        probs_contributions_by_datapoint = defaultdict(lambda : [])
+        # separate data by batches.
+        # reason of doing so is for better memory management.
+        # previously the peak memory usage is 24G and now looks like it's less than 1.5G.
+        batch_size = 1000*10000
+        if len(self.trees) * len(data) < batch_size:
+            return self._output_probs_contributions_by_batch(data)
+        else:
+            data_batch_size = batch_size // len(self.trees)
+            total_batch_number = int(np.ceil(len(data)*1.0 / data_batch_size))
+            batch_count = 0
+            processed_data = 0
+            result = []
+            while processed_data < len(data):
+                print "Batch: %s / %s, Batch size: %s" % (batch_count, total_batch_number, data_batch_size)
+                start = batch_count * data_batch_size
+                end = min((batch_count+1)*data_batch_size, len(data)+1)
+                data_part = data.iloc[start:end]
+                outputs = self._output_probs_contributions_by_batch(data_part)
+                for output in outputs:
+                    result.append(output)
+                processed_data += end - start
+                batch_count += 1
+            return np.array(result)
+
+    def _output_probs_contributions_by_batch(self, data):
+
+        probs_contributions_by_datapoint = []
         count = 0
         for tree in self.trees:
             contributions_by_tree = tree.output_probs_contributions(data)
-            for i in range(len(data)):
-                probs_contributions_by_datapoint[i].append(contributions_by_tree[i])
+            probs_contributions_by_datapoint.append(contributions_by_tree)
             count += 1
             if count % 10 == 0:
-                print "%s/%s" % (count, len(self.trees))
+                print "%s / %s" % (count, len(self.trees))
 
-        # probs_contributions_by_datapoint: n_data -> n_trees * n_classes * (n_features + 1)
-        # shape: n_data * n_trees * n_classes * (n_features + 1)
-        contributions = np.array(probs_contributions_by_datapoint.values())
-        return contributions.mean(axis=1)
+        # n_trees * n_data * n_classes * (n_features+1)
+        probs_contributions_by_datapoint = np.array(probs_contributions_by_datapoint)
+        return probs_contributions_by_datapoint.mean(axis=0)
 
     # debug. Use it to test whether predict_probs has the same output as clf
     # output shape: n_data * n_classes
