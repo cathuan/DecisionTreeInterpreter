@@ -94,17 +94,22 @@ class Tree(object):
             if node.feature == -2:
                 assert graph.is_leaf(node.node_id)
 
+    #@profile
+    # output shape: n_data * n_classes * (n_features+1)
     def output_probs_contributions(self, data):
-        def get_contribution(node_id):
-            contributions = self.contributions.get_contribution(node_id)
-            return self.contributions.get_probs_feature_contribution(contributions)
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return np.array([get_contribution(node_id) for node_id in predicted_leaves_ids])
+        contributions = []
+        for data_index, node_id in enumerate(predicted_leaves_ids):
+            contribution_for_one_datapoint = self.contributions.get_probs_feature_contribution(node_id)
+            contributions.append(contribution_for_one_datapoint)
+        return np.array(contributions)
 
     # debug. Use it to test whether predict_probs has the same output as clf
+    # output shape: n_data * n_classes
     def predict_proba(self, data):
-        feature_contris_for_all_data = self.output_probs_contributions(data)
-        return np.array([feature_contries.sum(axis=0) for feature_contries in feature_contris_for_all_data])
+        # contribution_for_all_data shape: n_data * n_classes * (n_features+1)
+        contribution_for_all_data = self.output_probs_contributions(data)
+        return contribution_for_all_data.sum(axis=2)
 
     def predict_proba_(self, data):
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
@@ -176,8 +181,6 @@ class TreeGraph(object):
 # contributes to this prob on the path from root ot the leaf.
 class Contributions(object):
 
-    Contribution = namedtuple("Contribution", ["feature", "impurity_contribution", "prob_contribution"])
-
     def __init__(self, tree_nodes, graph, n_classes, feature_names):
 
         # self.contribution : node_id -> [Contributions.Contribution]
@@ -187,44 +190,44 @@ class Contributions(object):
         # Because "contribution" is calculated inductively (from the parent), so we have to
         # calculate the "contribution" of all the nodes. But actually only the leaf will be used.
         self.contributions = {}
-        self.feature_names = feature_names
+        self.cached_probs_feature_contributions = {}
+
         self.contribution_length = len(feature_names) + 1
         self.n_classes = n_classes
         for node_id in graph.get_leaf_ids():
             path = graph.get_path_to_root(node_id)
-            contributions = self._construct_contributions(node_id, path, tree_nodes)
+            contributions = self._construct_contributions_for_path(node_id, path, tree_nodes)
             self.contributions[node_id] = contributions
 
+    # Calculate contribution from parent node -> child node.
+    # so child_node_prob - parent_node_prob is the contribution of the split (on parent node) if
+    # data is passed to the child node.
+    # output shape: n_classes * (n_features+1)
     def _construct_single_contribution(self, parent_node, child_node):
         feature_index = parent_node.feature_index
-        impurity_drop = parent_node.impurity - child_node.impurity
         prob_increase = child_node.percents - parent_node.percents
         assert len(prob_increase) == self.n_classes
-
-        impurity_contribution = np.zeros(self.contribution_length)
-        impurity_contribution[feature_index] = impurity_drop
 
         # (n_features + 1 for bias) * n_classes
         prob_contribution = np.zeros((self.contribution_length, self.n_classes))
         prob_contribution[feature_index] = prob_increase
-        contribution = Contributions.Contribution(feature=feature_index,
-                                                  impurity_contribution=impurity_contribution,
-                                                  prob_contribution=prob_contribution)
-        return contribution
 
+        return prob_contribution.transpose()
+
+    # original probs given on root node.
+    # it depends on the original data distribution passed to the model
+    # output shape: n_classes * (n_features+1)
     def _construct_root_contribution(self, root):
-
-        impurity_contribution = np.zeros(self.contribution_length)
-        impurity_contribution[-1] = root.impurity
 
         prob_contribution = np.zeros((self.contribution_length, self.n_classes))
         prob_contribution[-1] = root.percents
-        bias_contribution = Contributions.Contribution(feature=-1,
-                                                       impurity_contribution=impurity_contribution,
-                                                       prob_contribution=prob_contribution)
-        return bias_contribution
+        return prob_contribution.transpose()
 
-    def _construct_contributions(self, node_id, path, tree_nodes):
+    # given a leaf and the path from the root to the leaf, return a list of contributions, each
+    # element of the list is the contribution of a node on the path.
+    # output order is from leaf -> root.
+    # output: n_nodes_on_path * n_classes * (n_features+1)
+    def _construct_contributions_for_path(self, node_id, path, tree_nodes):
 
         contributions = []
         current_node_id = node_id
@@ -241,13 +244,20 @@ class Contributions(object):
         root = tree_nodes[current_node_id]
         bias_contribution = self._construct_root_contribution(root)
         contributions.append(bias_contribution)
-        return contributions
+        return np.array(contributions)
 
-    def get_contribution(self, node_id):
-        return self.contributions[node_id]
-
-    def get_probs_feature_contribution(self, contributions):
-        return np.array([contribution.prob_contribution for contribution in contributions]).sum(axis=0)
+    # output: n_classes * (n_features+1)
+    # columns = feature_names + ["bias"]
+    # rows = ["category %s" % c for c in range(n_classes)]
+    def get_probs_feature_contribution(self, node_id):
+        if node_id in self.cached_probs_feature_contributions:
+            return self.cached_probs_feature_contributions[node_id]
+        else:
+            # shape of contributions: n_nodes_on_path * n_classes * (n_features+1)
+            contributions = self.contributions[node_id]
+            feature_contributions = contributions.sum(axis=0)
+            self.cached_probs_feature_contributions[node_id] = feature_contributions
+            return feature_contributions
 
 
 class Predictor(object):

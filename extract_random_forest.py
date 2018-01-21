@@ -19,19 +19,32 @@ class Forest(object):
         for estimator in clf.estimators_:
             self.trees.append(Tree(estimator, feature_names))
 
+    # output shape: n_data * n_classes * (n_features + 1)
+    # FIXME: memory and speed issue here
     def output_probs_contributions(self, data):
 
-        probs_contributions = []
+        # n_data -> n_trees * n_classes * (n_features+1)
+        probs_contributions_by_datapoint = defaultdict(lambda : [])
+        count = 0
         for tree in self.trees:
             contributions_by_tree = tree.output_probs_contributions(data)
-            probs_contributions.append(contributions_by_tree)
-        probs_contributions = np.array(probs_contributions)
-        return probs_contributions.mean(axis=0)
+            for i in range(len(data)):
+                probs_contributions_by_datapoint[i].append(contributions_by_tree[i])
+            count += 1
+            if count % 10 == 0:
+                print "%s/%s" % (count, len(self.trees))
+
+        # probs_contributions_by_datapoint: n_data -> n_trees * n_classes * (n_features + 1)
+        # shape: n_data * n_trees * n_classes * (n_features + 1)
+        contributions = np.array(probs_contributions_by_datapoint.values())
+        return contributions.mean(axis=1)
 
     # debug. Use it to test whether predict_probs has the same output as clf
+    # output shape: n_data * n_classes
     def predict_proba(self, data):
-        feature_contris_for_all_data = self.output_probs_contributions(data)
-        return np.array([feature_contries.sum(axis=0) for feature_contries in feature_contris_for_all_data])
+        # contributions_by_data_points shape: n_data * n_classes * (n_features + 1)
+        contributions_by_data_points = self.output_probs_contributions(data)
+        return contributions_by_data_points.sum(axis=2)
 
 
 if __name__ == "__main__":
@@ -40,5 +53,10 @@ if __name__ == "__main__":
     clf.fit(iris.data, iris.target)
 
     forest = Forest(clf, iris.feature_names)
-    df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    print forest.output_probs_contributions(df)
+    df = pd.DataFrame(list(iris.data)*700, columns=iris.feature_names)
+    con = forest.output_probs_contributions(df)
+    print con[:100]
+    #ps = forest.predict_proba(df)
+    #ps_ = clf.predict_proba(df)
+    #for p, p_ in zip(ps, ps_)[:100]:
+    #    print p, p_
