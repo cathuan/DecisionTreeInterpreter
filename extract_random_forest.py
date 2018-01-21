@@ -19,6 +19,8 @@ class Forest(object):
         for estimator in clf.estimators_:
             self.trees.append(Tree(estimator, feature_names))
 
+    # TODO: in this function, we can use sklearn.external.joblib to parallel the job easily.
+    # TODO: write a split function to separate data in batches, and run in parallel.
     # output shape: n_data * n_classes * (n_features + 1)
     def output_probs_contributions(self, data):
 
