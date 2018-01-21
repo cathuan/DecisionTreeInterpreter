@@ -27,6 +27,8 @@ class TreeNode(object):
         else:
             self.feature = "X[%s]" % tree_.feature[node_id]
 
+        self.feature_index = tree_.feature[node_id]
+
         # handle old & new version of trees. In 0.13.1 and 0.19.1,
         # the implementation of tree_ has been changed.
         if hasattr(tree_, "init_error"):
@@ -83,7 +85,8 @@ class Tree(object):
             self.tree_nodes[node_id] = TreeNode(node_id, tree_, feature_names)
 
         graph = TreeGraph(tree_)
-        self.contributions = Contributions(self.tree_nodes, graph)
+        self.graph = graph
+        self.contributions = Contributions(self.tree_nodes, graph, self.n_classes, self.feature_names)
         self.predictor = Predictor(self.tree_nodes, graph)
 
         # sanity check
@@ -94,37 +97,14 @@ class Tree(object):
     def output_probs_contributions(self, data):
         def get_contribution(node_id):
             contributions = self.contributions.get_contribution(node_id)
-            return get_probs_feature_contribution(contributions, self.n_classes)
+            return self.contributions.get_probs_feature_contribution(contributions)
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return [get_contribution(node_id) for node_id in predicted_leaves_ids]
-
-    def output_impurity_contributions(self, data):
-        def get_contribution(node_id):
-            contributions = self.contributions.get_contribution(node_id)
-            return get_impurity_feature_contribution(contributions)
-        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return [get_contribution(node_id) for node_id in predicted_leaves_ids]
-
-    def print_probs_contributions(self, data):
-        def get_contribution(node_id):
-            contributions = self.contributions.get_contribution(node_id)
-            contribution_for_each_feature = get_probs_feature_contribution(contributions, self.n_classes)
-            return construct_contribution_output(contribution_for_each_feature, self.feature_names)
-        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return [get_contribution(node_id) for node_id in predicted_leaves_ids]
-
-    def print_impurity_contributions(self, data):
-        def get_contribution(node_id):
-            contributions = self.contributions.get_contribution(node_id)
-            contribution_for_each_feature = get_impurity_feature_contribution(contributions)
-            return construct_contribution_output(contribution_for_each_feature, self.feature_names)
-        predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
-        return [get_contribution(node_id) for node_id in predicted_leaves_ids]
+        return np.array([get_contribution(node_id) for node_id in predicted_leaves_ids])
 
     # debug. Use it to test whether predict_probs has the same output as clf
     def predict_proba(self, data):
         feature_contris_for_all_data = self.output_probs_contributions(data)
-        return np.array([sum(feature_contries.values()) for feature_contries in feature_contris_for_all_data])
+        return np.array([feature_contries.sum(axis=0) for feature_contries in feature_contris_for_all_data])
 
     def predict_proba_(self, data):
         predicted_leaves_ids = self.predictor.predict_leaf_ids(data)
@@ -198,7 +178,7 @@ class Contributions(object):
 
     Contribution = namedtuple("Contribution", ["feature", "impurity_contribution", "prob_contribution"])
 
-    def __init__(self, tree_nodes, graph):
+    def __init__(self, tree_nodes, graph, n_classes, feature_names):
 
         # self.contribution : node_id -> [Contributions.Contribution]
         # It records the contribution (to deduct impurity or change the probs to each category)
@@ -207,27 +187,41 @@ class Contributions(object):
         # Because "contribution" is calculated inductively (from the parent), so we have to
         # calculate the "contribution" of all the nodes. But actually only the leaf will be used.
         self.contributions = {}
+        self.feature_names = feature_names
+        self.contribution_length = len(feature_names) + 1
+        self.n_classes = n_classes
         for node_id in graph.get_leaf_ids():
             path = graph.get_path_to_root(node_id)
             contributions = self._construct_contributions(node_id, path, tree_nodes)
             self.contributions[node_id] = contributions
 
     def _construct_single_contribution(self, parent_node, child_node):
-        feature = parent_node.feature
-        threshold = parent_node.threshold
+        feature_index = parent_node.feature_index
         impurity_drop = parent_node.impurity - child_node.impurity
-        prob_increase = np.array([child_p - parent_p for (child_p, parent_p)
-                                  in zip(child_node.percents, parent_node.percents)])
-        contribution = Contributions.Contribution(feature=feature,
-                                                  impurity_contribution=impurity_drop,
-                                                  prob_contribution=prob_increase)
+        prob_increase = child_node.percents - parent_node.percents
+        assert len(prob_increase) == self.n_classes
+
+        impurity_contribution = np.zeros(self.contribution_length)
+        impurity_contribution[feature_index] = impurity_drop
+
+        # (n_features + 1 for bias) * n_classes
+        prob_contribution = np.zeros((self.contribution_length, self.n_classes))
+        prob_contribution[feature_index] = prob_increase
+        contribution = Contributions.Contribution(feature=feature_index,
+                                                  impurity_contribution=impurity_contribution,
+                                                  prob_contribution=prob_contribution)
         return contribution
 
     def _construct_root_contribution(self, root):
 
-        bias_contribution = Contributions.Contribution(feature="bias",
-                                                       impurity_contribution=root.impurity,
-                                                       prob_contribution=root.percents)
+        impurity_contribution = np.zeros(self.contribution_length)
+        impurity_contribution[-1] = root.impurity
+
+        prob_contribution = np.zeros((self.contribution_length, self.n_classes))
+        prob_contribution[-1] = root.percents
+        bias_contribution = Contributions.Contribution(feature=-1,
+                                                       impurity_contribution=impurity_contribution,
+                                                       prob_contribution=prob_contribution)
         return bias_contribution
 
     def _construct_contributions(self, node_id, path, tree_nodes):
@@ -252,27 +246,8 @@ class Contributions(object):
     def get_contribution(self, node_id):
         return self.contributions[node_id]
 
-
-# Helper functions to generate and format the required output based on the contributions
-def get_probs_feature_contribution(contributions, n_classes):
-    feature_contris = defaultdict(lambda : np.array([0.0] * n_classes))
-    for contribution in contributions:
-        feature_contris[contribution.feature] += contribution.prob_contribution
-    return feature_contris
-
-
-def get_impurity_feature_contribution(contributions):
-    feature_contris = defaultdict(lambda : 0)
-    for contribution in contributions:
-        feature_contris[contribution.feature] += contribution.impurity_contribution
-    return feature_contris
-
-
-def construct_contribution_output(feature_contris, feature_names):
-    output = "%s: %s" % ("bias", feature_contris["bias"])
-    for feature in sorted(feature_names):
-        output += ", %s: %s" % (feature, feature_contris[feature])
-    return output
+    def get_probs_feature_contribution(self, contributions):
+        return np.array([contribution.prob_contribution for contribution in contributions]).sum(axis=0)
 
 
 class Predictor(object):
@@ -304,6 +279,22 @@ class Predictor(object):
         return predicted_leaves_left + predicted_leaves_right
 
 
+# Helper functions to generate and format the required output based on the contributions
+# At the moment not using them.
+def get_impurity_feature_contribution(contributions):
+    feature_contris = defaultdict(lambda : 0)
+    for contribution in contributions:
+        feature_contris[contribution.feature] += contribution.impurity_contribution
+    return feature_contris
+
+
+def construct_contribution_output(feature_contris, feature_names):
+    output = "%s: %s" % ("bias", feature_contris["bias"])
+    for feature in sorted(feature_names):
+        output += ", %s: %s" % (feature, feature_contris[feature])
+    return output
+
+
 if __name__ == "__main__":
 
     # train the DecisionTree model
@@ -313,11 +304,12 @@ if __name__ == "__main__":
 
     tree = Tree(clf, iris.feature_names)
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    #print tree.output_probs_contributions(df)
+    print tree.output_probs_contributions(df)
     #print tree.print_probs_contributions(df)
     #print tree.output_impurity_contributions(df)
     #print tree.print_impurity_contributions(df)
 
+    exit(0)
     ps = tree.predict_proba(df)
     ps_ = tree.predict_proba_(df)
     ps__ = clf.predict_proba(df)

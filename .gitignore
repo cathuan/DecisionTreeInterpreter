@@ -4,3 +4,4 @@
 *.ref.py
 *.tags*
 *.pyc
+*.lprof
