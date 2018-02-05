@@ -1,6 +1,5 @@
 from sklearn.datasets import load_iris
 from sklearn.tree import DecisionTreeClassifier
-from sklearn import tree
 import pandas as pd
 import numpy as np
 from collections import namedtuple, defaultdict
@@ -140,7 +139,7 @@ class TreeGraph(object):
 
             # sanity check. A node either has both children or no children
             assert (left_children_id == TreeGraph.LEAF and right_children_id == TreeGraph.LEAF) or \
-                    (left_children_id != TreeGraph.LEAF and right_children_id != TreeGraph.LEAF)
+                (left_children_id != TreeGraph.LEAF and right_children_id != TreeGraph.LEAF)
 
             # record the child is the left child of the parent or the right child
             self.parent[left_children_id] = TreeGraph.ParentInfo(parent_id=parent_id, is_left_child=True)
@@ -291,7 +290,7 @@ class Predictor(object):
 # Helper functions to generate and format the required output based on the contributions
 # At the moment not using them.
 def get_impurity_feature_contribution(contributions):
-    feature_contris = defaultdict(lambda : 0)
+    feature_contris = defaultdict(lambda: 0)
     for contribution in contributions:
         feature_contris[contribution.feature] += contribution.impurity_contribution
     return feature_contris
@@ -311,21 +310,6 @@ if __name__ == "__main__":
     clf = DecisionTreeClassifier()
     clf.fit(iris.data, iris.target)
 
-    tree = Tree(clf, iris.feature_names)
+    tree_ = Tree(clf, iris.feature_names)
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    print tree.output_probs_contributions(df)
-    #print tree.print_probs_contributions(df)
-    #print tree.output_impurity_contributions(df)
-    #print tree.print_impurity_contributions(df)
-
-    exit(0)
-    ps = tree.predict_proba(df)
-    ps_ = tree.predict_proba_(df)
-    ps__ = clf.predict_proba(df)
-
-    for p, p_, p__ in zip(ps, ps_, ps__):
-        print p, p_, p__
-
-    #ps_ = clf.predict_proba(iris.data)
-    #for a in zip(ps, ps_):
-    #    print a
+    print tree_.output_probs_contributions(df)
